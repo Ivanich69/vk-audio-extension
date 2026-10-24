@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VK Audio</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="popup.js"></script>
+</head>
+<body class="popup">
+  <header><div class="logo" aria-hidden="true">♫</div><div><h1>VK Audio <small id="version"></small></h1><p>Сохрани то, что слушаешь</p></div></header>
+  <main>
+    <p class="hint">Открой музыку ВКонтакте или включи трек, затем обнови список.</p>
+    <details id="settings">
+      <summary>Настройки загрузки</summary>
+      <label class="setting"><input id="background-downloads" type="checkbox" checked disabled> Открывать загрузку в фоне</label>
+      <label class="setting"><input id="auto-close-downloads" type="checkbox" checked disabled> Закрывать вкладку после сохранения</label>
+      <p class="small">Фоновая загрузка не переключает с VK. После успешного сохранения вкладка закроется автоматически, если включена эта настройка. При ошибке, отмене или запросе доступа она останется открытой. Окно выбора места сохранения появится как обычно.</p>
+      <p id="settings-status" class="small" role="status"></p>
+    </details>
+    <div class="toolbar"><span id="count">Ищем аудио…</span><button id="refresh" class="secondary" type="button">Обновить</button></div>
+    <p id="status" role="status" aria-live="polite"></p>
+    <p id="capture-state" class="small" role="status"></p>
+    <p id="player-title" class="small" hidden></p>
+    <div id="recovery" hidden>
+      <p class="small">Для резервного захвата открой F12 на вкладке VK и перезагрузи её. Оставь DevTools открытым, пока расширение ищет треки.</p>
+      <button id="reload" class="secondary" type="button">Перезагрузить VK</button>
+    </div>
+    <ul id="tracks" aria-label="Обнаруженное аудио"></ul>
+    <p id="empty" class="empty" hidden>Треки пока не найдены. Перезагрузи страницу ВКонтакте и открой музыку, чтобы получить список треков с названиями.</p>
+    <button id="clear" class="text-button" type="button" hidden>Очистить список</button>
+    <details><summary>Диагностика обнаружения</summary><textarea id="diagnostics" readonly rows="9" aria-label="Диагностика без ссылок и ключей доступа"></textarea><button id="select-diagnostics" type="button" class="text-button">Выделить для копирования</button></details>
+  </main>
+  <footer>Прямые файлы и HLS, включая AES-128. Из TS извлекается MP3 или AAC без потери качества.</footer>
+</body>
+</html>

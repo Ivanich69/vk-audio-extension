@@ -1,0 +1,10 @@
+artifacts/
+.browser-test/
+node_modules/
+.env
+.env.*
+*.log
+*.zip
+*.crx
+.DS_Store
+Thumbs.db

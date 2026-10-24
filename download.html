@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Сохранить аудио — VK Audio</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="download.js"></script>
+</head>
+<body class="download">
+  <header><div class="logo" aria-hidden="true">♫</div><div><h1>Сохранить аудио</h1><p>VK Audio</p></div></header>
+  <main>
+    <h2 id="title">Подготовка…</h2>
+    <p id="format-hint" class="hint">Определяем формат аудио. Не закрывай эту вкладку до окончания загрузки.</p>
+    <progress id="progress" max="1" value="0" aria-label="Ход загрузки"></progress>
+    <p id="status" role="status" aria-live="polite">Проверяем ссылку…</p>
+    <div class="actions">
+      <button id="grant" type="button" hidden>Разрешить серверы аудио и продолжить</button>
+      <button id="start" type="button" hidden>Повторить</button>
+      <button id="save-ts" type="button" class="secondary" hidden>Сохранить исходный TS</button>
+      <button id="cancel" type="button" class="secondary" hidden>Отменить</button>
+    </div>
+    <details id="diagnostics" hidden>
+      <summary>Диагностика извлечения аудио</summary>
+      <textarea id="diagnostic-text" readonly rows="14" aria-label="Диагностика извлечения аудио"></textarea>
+    </details>
+    <p class="small">Лимит файла или потока — 256 МБ. Формат проверяется до сохранения. MP3 и AAC извлекаются из TS автоматически. Поддержан HLS AES-128 при доступном ключе. Перекодирование AAC в MP3, SAMPLE-AES, DRM и прямые эфиры пока не поддерживаются.</p>
+  </main>
+</body>
+</html>
