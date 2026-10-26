@@ -80,6 +80,10 @@ const encryptedPlaylist = encryptedLines.join("\n");
 writeFileSync(resolve(fixtureDir, "encrypted.m3u8"), encryptedPlaylist);
 writeFileSync(resolve(fixtureDir, "denied-key.m3u8"), encryptedPlaylist.replaceAll("rotating.key", "missing.key"));
 writeFileSync(resolve(fixtureDir, "permission-key.m3u8"), encryptedPlaylist.replaceAll("keys.vk.com", "keys.example.org"));
+writeFileSync(resolve(fixtureDir, "bitrate.mp3"), readFileSync(resolve(root, "tests/fixtures/ts/mp3.audio")));
+writeFileSync(resolve(fixtureDir, "bitrate-low.mp3"), readFileSync(resolve(root, "tests/fixtures/ts/mp3-low.audio")));
+writeFileSync(resolve(fixtureDir, "bitrate-aes.m3u8"), encryptedPlaylist.replaceAll("https://keys.vk.com/fixture/rotating.key", "https://keys.vkuseraudio.ru/bitrate/probe.key"));
+writeFileSync(resolve(fixtureDir, "probe.key"), encryptionKeys[0]);
 const child = spawn(browser, [
   "--headless=new", `--user-data-dir=${profile}`, "--remote-debugging-pipe",
   "--enable-unsafe-extension-debugging", "--no-sandbox",
@@ -168,8 +172,10 @@ try {
   let keyReads = 0;
   let encryptedSegmentReads = 0;
   const verificationRequests = [];
+  const bitrateRequests = [];
   on("Fetch.requestPaused", async (params, session) => {
     const url = params.request.url;
+    if (new URL(url).pathname.startsWith("/bitrate/")) bitrateRequests.push(url);
     let body;
     let mime;
     let disposition;
@@ -255,11 +261,11 @@ try {
   assert.equal(trackList.tracks.length, 1);
   assert.equal(trackList.tracks[0].title, "Тестовый артист — Тестовая песня");
   assert.equal(trackList.tracks[0].kind, "mp3");
-  assert.equal(trackList.diagnostics.contentVersion, "0.3.12");
+  assert.equal(trackList.diagnostics.contentVersion, "0.3.13");
   assert.equal(await evaluate(pageSession, "Boolean(window[Symbol.for('vk-audio.capture.v3')])"), true);
   await until(async () => {
     const list = await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId},{type:'LIST_TRACKS'},{frameId:0})`);
-    return list.diagnostics.main?.version === "0.3.12";
+    return list.diagnostics.main?.version === "0.3.13";
   }, "page capture handshake");
   await evaluate(pageSession, "fetch('https://vk.com/fixture/bb2.mp3').then(r=>r.arrayBuffer())");
   await evaluate(pageSession, "fetch('https://vk.com/fixture/list.m3u8').then(r=>r.text())");
@@ -672,13 +678,45 @@ try {
     await until(async () => evaluate(session, condition), "failure or permission request remains visible with auto-close on");
     assert.ok((await call("Target.getTargets")).targetInfos.some(t => t.targetId === downloadTargets.get(session)));
   }
+  // Probe traffic comes from the real service worker, never from the page.
+  const { sessionId: probeSession } = await call("Target.attachToTarget", { targetId: worker.targetId, flatten: true });
+  await call("Fetch.enable", { patterns: [{ urlPattern: "https://*.vkuseraudio.ru/bitrate/*" }] }, probeSession);
+  const probeTracks = [
+    { audioId: "-76_700", artist: "Bitrate", name: "MP3", duration: 1, url: "https://cs1-77v4.vkuseraudio.ru/bitrate/bitrate.mp3" },
+    { audioId: "-76_701", artist: "Bitrate", name: "HLS", duration: 2, url: "https://cs1-77v4.vkuseraudio.ru/bitrate/mp3.m3u8" },
+    { audioId: "-76_702", artist: "Bitrate", name: "AES", duration: 2, url: "https://cs1-77v4.vkuseraudio.ru/bitrate/bitrate-aes.m3u8" }
+  ];
+  await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId},{type:'IMPORT_TRACKS',tracks:${JSON.stringify(probeTracks)}},{frameId:0})`);
+  await evaluate(pageSession, `(() => {
+    const box = document.createElement('section'); box.id='bitrate-fixture';
+    box.style.cssText='position:fixed;top:0;left:0;z-index:99999;background:white;width:500px';
+    box.innerHTML=${JSON.stringify(probeTracks.map((t, i) => `<div class="audio_row" id="bitrate-${i}" data-full-id="${t.audioId}"><span class="audio_row__title">Bitrate</span><span class="audio_row__actions"></span></div>`).join(''))};
+    document.body.append(box);
+  })()`);
+  await call("Page.bringToFront", {}, pageSession);
+  const bitrateText = i => `document.querySelector('#bitrate-${i} [data-vk-audio-download]')?.shadowRoot.querySelector('.bitrate').textContent`;
+  for (let i = 0; i < 3; i++) await until(async () => evaluate(pageSession, `(${bitrateText(i)})?.includes('≈')`), `bitrate label ${i}`);
+  assert.equal(await evaluate(pageSession, bitrateText(0)), "≈64 кбит/с");
+  assert.equal(await evaluate(pageSession, bitrateText(1)), "≈64 кбит/с");
+  const beforePopupProbes = bitrateRequests.length;
+  await call("Page.bringToFront", {}, popupSession);
+  await evaluate(popupSession, `chrome.tabs.query = async () => [{id:${tabId},url:'https://vk.com/fixture'}]; document.getElementById('refresh').click()`);
+  await until(async () => evaluate(popupSession, "[...document.querySelectorAll('#tracks li')].some(row=>row.querySelector('strong').textContent==='Bitrate — MP3' && row.querySelector('.bitrate').textContent==='≈64 кбит/с')"), "popup shows cached bitrate");
+  assert.equal(bitrateRequests.length, beforePopupProbes, "popup and row share probe cache");
+  // A signed URL refresh must replace the old value rather than display stale quality.
+  await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId},{type:'IMPORT_TRACKS',tracks:${JSON.stringify([{ ...probeTracks[0], url: "https://cs1-77v4.vkuseraudio.ru/bitrate/bitrate-low.mp3" }])}},{frameId:0})`);
+  await call("Page.bringToFront", {}, pageSession);
+  await until(async () => evaluate(pageSession, `${bitrateText(0)} === '≈32 кбит/с'`), "changed source invalidates bitrate");
+  assert.equal(bitrateRequests.filter(url => url.endsWith('/bitrate.mp3')).length, 1);
+  assert.equal(bitrateRequests.filter(url => url.endsWith('/bitrate-low.mp3')).length, 1);
+  assert.equal(bitrateRequests.filter(url => /\/mp3-part\d+\.ts$/.test(url)).length, 1, "probe reads one HLS segment");
   await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId}, {type:'CLEAR_TRACKS'}, {frameId:0})`);
   const cleared = await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId}, {type:'LIST_TRACKS'}, {frameId:0})`);
   assert.equal(cleared.tracks.length, 0);
   assert.equal(await evaluate(pageSession, `(${rowButton("inline-hls")}).disabled`), true);
   assert.deepEqual(browserErrors, []);
   mkdirSync(resolve(root, "artifacts"), { recursive: true });
-  const report = { extensionVersion: "0.3.12", browser: version.product, extensionId, devtools: withDevtools, checked: ["MV3 worker loads", "content-script DOM discovery", "resource timing HLS discovery", "notification bb2.mp3 filtered", "al_audio.php without usable URLs plus independently discovered HLS", "empty, encoded and invalid URL counters without private values", "Media Session title available in isolated content script", "user-selected player name persists after track change", "stale player title selection rejected", "capture version and counters available", "replaced fetch hook repaired from popup", "catalog.getSection fetch response supplies exact names and durations", "XHR updates signed URLs without duplicate tracks", "API names survive DOM rescans", "popup displays API names and 3:18 duration", "messages.getHistory attachment supplies exact MP3 URL, name and duration", "message text and access keys excluded from track list and diagnostics", "encoded al_audio.php yields named MP3 and HLS", "decoded HLS upgrades existing resource without duplication", "viewer ID and masked placeholder URLs are not published", ...(withDevtools ? ["real DevTools captures messages.getHistory from an iframe without page hooks", "real DevTools decodes viewer-bound music URLs using inspectedWindow.eval"] : []), "background rejects START_DOWNLOAD from non-popup pages", "opaque API URL is identified as HLS and saved", "TS AAC extraction matches independent FFmpeg stream copy", "downloaded audio decodes with FFmpeg", "AES-128 HLS yields exact AAC including implicit IV, explicit IV, key rotation and METHOD=NONE", "decrypted HLS decodes with FFmpeg", "missing AES key stops before fetching media", "separate key origin pauses for permission", "MP3 extraction matches FFmpeg stream copy and decodes", "download page reports detected AAC/MP3 format", "truncated TS is rejected without saving", "lazy row controls match IDs instead of identical titles", "row controls enable on late metadata", "row controls survive rerender and reject stale row identity", "synthetic clicks and forged row grants do not download", "trusted mouse and keyboard row clicks save HLS and verified direct MP3 without playback", "clearing tracks disables row controls", "HTML and JSON with MP3 URL and MIME are rejected before Save As", "actual MP3 with HTML MIME and HTM disposition saves verified audio bytes", "one GET saves identical verified bytes without a second signed URL request", "HLS behind an MP3 URL follows the HLS path", "empty AFC=3 packets preserve MP3 and AAC across HLS segments", "empty packets survive AES-128 and match original FFmpeg audio", "ID3-tagged MP3 extracted unchanged and decoded by FFmpeg", "unknown MPEG header yields bounded diagnostics without private contents", "TS fallback saves retained bytes twice without refetch or MP3 mislabeling", "network and key failures never offer partial TS fallback", "VK audio CDN host permission covers root and subdomains in fresh profile", "CDN direct MP3 and HLS download without per-server grants", "unrelated and lookalike domains have no automatic host permission", "default background row downloads keep VK active", "popup preference persists across reload and enables foreground downloads", "auto-close defaults on and disabled preference persists", "direct MP3, HLS and TS fallback tabs close after confirmed save with exact bytes", "VK and error or permission tabs remain open", "clear list"], verificationRequests, rowDownloadCount: rowDownloads.length, mp3File: mp3Download.filename, hlsFile: hlsDownloads[0].filename, encryptedHlsFile: encryptedDownload.filename, runtimeErrors: browserErrors, vkAccountUsed: false };
+  const report = { extensionVersion: "0.3.13", browser: version.product, extensionId, devtools: withDevtools, checked: ["MV3 worker loads", "content-script DOM discovery", "resource timing HLS discovery", "notification bb2.mp3 filtered", "al_audio.php without usable URLs plus independently discovered HLS", "empty, encoded and invalid URL counters without private values", "Media Session title available in isolated content script", "user-selected player name persists after track change", "stale player title selection rejected", "capture version and counters available", "replaced fetch hook repaired from popup", "catalog.getSection fetch response supplies exact names and durations", "XHR updates signed URLs without duplicate tracks", "API names survive DOM rescans", "popup displays API names and 3:18 duration", "messages.getHistory attachment supplies exact MP3 URL, name and duration", "message text and access keys excluded from track list and diagnostics", "encoded al_audio.php yields named MP3 and HLS", "decoded HLS upgrades existing resource without duplication", "viewer ID and masked placeholder URLs are not published", ...(withDevtools ? ["real DevTools captures messages.getHistory from an iframe without page hooks", "real DevTools decodes viewer-bound music URLs using inspectedWindow.eval"] : []), "background rejects START_DOWNLOAD from non-popup pages", "opaque API URL is identified as HLS and saved", "TS AAC extraction matches independent FFmpeg stream copy", "downloaded audio decodes with FFmpeg", "AES-128 HLS yields exact AAC including implicit IV, explicit IV, key rotation and METHOD=NONE", "decrypted HLS decodes with FFmpeg", "missing AES key stops before fetching media", "separate key origin pauses for permission", "MP3 extraction matches FFmpeg stream copy and decodes", "download page reports detected AAC/MP3 format", "truncated TS is rejected without saving", "lazy row controls match IDs instead of identical titles", "row controls enable on late metadata", "row controls survive rerender and reject stale row identity", "synthetic clicks and forged row grants do not download", "trusted mouse and keyboard row clicks save HLS and verified direct MP3 without playback", "clearing tracks disables row controls", "HTML and JSON with MP3 URL and MIME are rejected before Save As", "actual MP3 with HTML MIME and HTM disposition saves verified audio bytes", "one GET saves identical verified bytes without a second signed URL request", "HLS behind an MP3 URL follows the HLS path", "empty AFC=3 packets preserve MP3 and AAC across HLS segments", "empty packets survive AES-128 and match original FFmpeg audio", "ID3-tagged MP3 extracted unchanged and decoded by FFmpeg", "unknown MPEG header yields bounded diagnostics without private contents", "TS fallback saves retained bytes twice without refetch or MP3 mislabeling", "network and key failures never offer partial TS fallback", "VK audio CDN host permission covers root and subdomains in fresh profile", "CDN direct MP3 and HLS download without per-server grants", "unrelated and lookalike domains have no automatic host permission", "default background row downloads keep VK active", "popup preference persists across reload and enables foreground downloads", "auto-close defaults on and disabled preference persists", "direct MP3, HLS and TS fallback tabs close after confirmed save with exact bytes", "VK and error or permission tabs remain open", "visible rows show sampled MP3, HLS and AES-128 bitrate", "popup shares bitrate cache with inline controls", "changed audio URL replaces stale bitrate", "HLS bitrate uses one segment without saving a file", "clear list"], verificationRequests, rowDownloadCount: rowDownloads.length, mp3File: mp3Download.filename, hlsFile: hlsDownloads[0].filename, encryptedHlsFile: encryptedDownload.filename, runtimeErrors: browserErrors, vkAccountUsed: false };
   writeFileSync(resolve(root, "artifacts", withDevtools ? "browser-devtools-smoke.json" : "browser-smoke.json"), JSON.stringify(report, null, 2) + "\n");
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {

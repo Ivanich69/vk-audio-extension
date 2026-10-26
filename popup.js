@@ -3,6 +3,24 @@ import { durationText, errorText, isVkPage, originPattern } from "./lib/media.js
 const el = id => document.getElementById(id);
 let activeTab;
 let busy = false;
+const bitrateLabels = new WeakMap();
+const bitrateObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const label = entry.target;
+    const data = bitrateLabels.get(label);
+    bitrateObserver.unobserve(label);
+    if (!data || !label.isConnected) continue;
+    label.textContent = "…";
+    chrome.runtime.sendMessage({ type: "GET_BITRATE", tabId: data.tabId, id: data.track.id }).then(result => {
+      if (!label.isConnected) return;
+      const rate = result?.bitrate;
+      const valid = result?.ok && result.url === data.track.url && Number.isInteger(rate?.kbps) && rate.kbps >= 8 && rate.kbps <= 2000;
+      label.textContent = valid ? `≈${rate.kbps} кбит/с` : "— кбит/с";
+      label.title = valid ? "Оценка по аудиокадрам фрагмента; средний битрейт при VBR может отличаться." : "Не удалось определить битрейт. Скачивание доступно.";
+    }).catch(() => { if (label.isConnected) label.textContent = "— кбит/с"; });
+  }
+});
 el("version").textContent = chrome.runtime.getManifest().version;
 
 function showDiagnostics(diagnostics, injectionError = "") {
@@ -54,6 +72,7 @@ async function download(track, button) {
 }
 
 function render(tracks, playerTitle = "") {
+  bitrateObserver.disconnect();
   el("player-title").hidden = !playerTitle;
   el("player-title").textContent = playerTitle ? `В плеере: ${playerTitle}` : "";
   el("tracks").replaceChildren();
@@ -92,8 +111,14 @@ function render(tracks, playerTitle = "") {
       });
       info.append(usePlayer);
     }
-    row.append(info, button);
+    const actions = document.createElement("div"); actions.className = "download-actions";
+    const bitrate = document.createElement("span"); bitrate.className = "bitrate";
+    bitrate.textContent = "— кбит/с";
+    bitrateLabels.set(bitrate, { track, tabId: activeTab?.id });
+    actions.append(bitrate, button);
+    row.append(info, actions);
     el("tracks").append(row);
+    bitrateObserver.observe(bitrate);
   }
 }
 

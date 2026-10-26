@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 import { webcrypto } from "node:crypto";
 import { errorText, filename, isVkPage, mediaKind, safeUrl } from "../lib/media.js";
 
-const source = readFileSync(new URL("../background.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/, "");
+const source = readFileSync(new URL("../background.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "");
 const id = "12345678-1234-4234-8234-123456789abc";
 const nonce = "abcdefab-abcd-4abc-8abc-abcdefabcdef";
 const track = { id, audioId: "-2_3", source: "vk-api", url: "https://cdn.vk.com/song.mp3?token=fixture", title: "Артист — Трек" };
@@ -21,7 +21,7 @@ function harness(approved = track, backgroundDownloads) {
     downloads: { download: async args => { downloads.push(args); return 19; } },
     storage: { local: { get: async () => ({ backgroundDownloads }) }, session: { set: async args => { stored.push(args); }, remove: async () => {} } }
   };
-  runInNewContext(source, { chrome, crypto: webcrypto, errorText, filename, isVkPage, mediaKind, safeUrl, Date });
+  runInNewContext(source, { chrome, crypto: webcrypto, errorText, filename, isVkPage, mediaKind, safeUrl, Date, createBitrateProbe: () => async () => ({ kbps: 128, estimated: true }) });
   async function send(message, origin = sender) {
     let response;
     const result = listener(message, origin, value => { response = value; });
@@ -93,4 +93,16 @@ test("popup direct files use the same verified download page as inline controls"
   assert.equal(h.tabs[0].active, true);
   assert.equal(h.downloads.length, 0);
   assert.equal(Object.values(h.stored[0])[0].url, track.url);
+});
+
+test("bitrate lookup uses approved track in exact document and ignores supplied URL", async () => {
+  const h = harness();
+  const result = await h.send({ type: "GET_BITRATE", id, url: "https://attacker.example.org/secret", tabId: 900 });
+  assert.equal(result.ok, true);
+  assert.equal(result.url, track.url);
+  assert.equal(h.messages[0][0], 42);
+  assert.equal(h.messages[0][2].documentId, "origin-document");
+  assert.equal(h.tabs.length + h.downloads.length, 0);
+  assert.equal(await h.send({ type: "GET_BITRATE", id }, { ...sender, id: "other" }), undefined);
+  assert.equal((await h.send({ type: "GET_BITRATE", id }, { ...sender, documentId: undefined })).ok, false);
 });

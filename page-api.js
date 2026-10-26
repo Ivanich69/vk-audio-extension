@@ -6,7 +6,7 @@
   const CHANNEL = "vk-audio-api-v3";
   const post = window.postMessage.bind(window);
   if (window[KEY]) { window[KEY].install(); return; }
-  const state = { version: "0.3.12", responses: 0, parsed: 0, found: 0, missingUrls: 0, emptyUrls: 0, encodedUrls: 0, invalidUrls: 0, decodedUrls: 0, decodeFailed: 0, needsUserId: 0, errors: 0, oversized: 0, endpoint: "" };
+  const state = { version: "0.3.13", responses: 0, parsed: 0, found: 0, missingUrls: 0, emptyUrls: 0, encodedUrls: 0, invalidUrls: 0, decodedUrls: 0, decodeFailed: 0, needsUserId: 0, errors: 0, oversized: 0, endpoint: "" };
   const consumed = new WeakSet();
   let fetchWrapper;
   let jsonWrapper;

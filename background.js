@@ -1,4 +1,18 @@
 import { errorText, isVkPage, mediaKind, safeUrl } from "./lib/media.js";
+import { createBitrateProbe } from "./lib/bitrate.js";
+
+const probeBitrate = createBitrateProbe({ hasPermission: pattern => chrome.permissions.contains({ origins: [pattern] }) });
+
+async function getBitrate(message, sender, popup = false) {
+  const tabId = popup ? message.tabId : sender.tab?.id;
+  if (!Number.isInteger(tabId) || !/^[a-f0-9-]{36}$/.test(message.id || "")) throw new Error("Некорректный запрос.");
+  const tab = await chrome.tabs.get(tabId);
+  if (!isVkPage(tab.url) || (!popup && (!isVkPage(sender.url) || typeof sender.documentId !== "string"))) throw new Error("Открой VK.");
+  const result = await chrome.tabs.sendMessage(tabId, { type: "GET_TRACK", id: message.id }, popup ? { frameId: 0 } : { documentId: sender.documentId });
+  if (!result?.track || result.track.id !== message.id) return { ok: true, bitrate: null };
+  const url = safeUrl(result.track.url);
+  return { ok: true, url, bitrate: await probeBitrate(url) };
+}
 
 async function ensureCapture(tabId, main = true) {
   if (!Number.isInteger(tabId)) throw new Error("Некорректная вкладка.");
@@ -6,7 +20,7 @@ async function ensureCapture(tabId, main = true) {
   if (!isVkPage(tab.url)) throw new Error("Открой вкладку ВКонтакте.");
   await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", files: ["content.js"] });
   if (main) await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", files: ["audio-decoder.js", "api-parser.js", "page-api.js"] });
-  return { ok: true, version: "0.3.12" };
+  return { ok: true, version: "0.3.13" };
 }
 
 async function importTracks(tabId, tracks, devtools) {
@@ -65,9 +79,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   let action;
   if (sender.url === chrome.runtime.getURL("popup.html")) {
     if (message?.type === "START_DOWNLOAD") action = startDownload(message);
+    else if (message?.type === "GET_BITRATE") action = getBitrate(message, sender, true);
     else if (message?.type === "ENSURE_CAPTURE") action = ensureCapture(message.tabId);
   } else if (sender.tab && isVkPage(sender.url) && message?.type === "ROW_DOWNLOAD") {
     action = startRowDownload(message, sender);
+  } else if (sender.tab && isVkPage(sender.url) && message?.type === "GET_BITRATE") {
+    action = getBitrate(message, sender);
   } else if (sender.url === chrome.runtime.getURL("devtools.html") && message?.type === "DEVTOOLS_CAPTURE") {
     const state = message.state || {};
     const devtools = { active: true };

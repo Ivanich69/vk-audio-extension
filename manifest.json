@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VK Audio — сохранить аудио",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Сохранение обнаруженных аудиофайлов и HLS-потоков, включая AES-128, со страниц ВКонтакте.",
   "minimum_chrome_version": "120",
   "permissions": ["downloads", "storage", "scripting"],

@@ -22,6 +22,41 @@
   let scanTimer;
   let notice;
   let noticeTimer;
+  const bitrateValues = new Map();
+  let bitrateRequests = 0;
+  const bitrateObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const row = entry.target;
+      if (!row.isConnected) { bitrateObserver.unobserve(row); continue; }
+      const control = row && rowControls.get(row);
+      if (control) { control.visible = entry.isIntersecting; updateControl(row, control); }
+    }
+  });
+
+  function updateBitrate(row, control, track) {
+    const cached = track && bitrateValues.get(track.url);
+    const value = cached?.value;
+    control.bitrate.textContent = value ? `≈${value.kbps} кбит/с` : cached?.pending ? "…" : "— кбит/с";
+    control.bitrate.title = value ? "Оценка по аудиокадрам небольшого фрагмента. При VBR средний битрейт всего трека может отличаться." : "Битрейт пока не определён. Проверка не мешает скачиванию.";
+    if (!track || cached || !control.visible || bitrateRequests >= 2) return;
+    const url = track.url;
+    const entry = { pending: true, value: null };
+    if (bitrateValues.size >= 1000) {
+      const oldest = [...bitrateValues].find(([, value]) => !value.pending);
+      if (oldest) bitrateValues.delete(oldest[0]);
+    }
+    bitrateValues.set(url, entry);
+    bitrateRequests++;
+    control.bitrate.textContent = "…";
+    chrome.runtime.sendMessage({ type: "GET_BITRATE", id: track.id }).then(result => {
+      const rate = result?.bitrate;
+      if (result?.ok && result.url === url && Number.isInteger(rate?.kbps) && rate.kbps >= 8 && rate.kbps <= 2000) entry.value = rate;
+    }).catch(() => {}).finally(() => {
+      entry.pending = false; bitrateRequests--;
+      if (row.isConnected) updateControl(row, control);
+      scheduleScan();
+    });
+  }
 
   function rowData(row) {
     const raw = row.getAttribute("data-audio") || row.querySelector("[data-audio]")?.getAttribute("data-audio");
@@ -79,6 +114,7 @@
     const label = track ? `Скачать: ${track.title}` : "Включи этот трек, чтобы VK передал ссылку для скачивания";
     control.host.title = label;
     control.button.setAttribute("aria-label", label);
+    updateBitrate(row, control, track);
   }
 
   async function downloadRow(event, row, control) {
@@ -115,8 +151,10 @@
         const style = document.createElement("style");
         style.textContent = ":host{all:initial;display:inline-flex;vertical-align:middle;margin-inline-start:6px;flex-shrink:0}button{box-sizing:border-box;width:28px;height:28px;border:0;border-radius:7px;padding:0;background:transparent;color:#5181b8;font:600 22px/28px system-ui,sans-serif;cursor:pointer}button:hover{background:#5181b822}button:focus-visible{outline:2px solid #5181b8;outline-offset:2px}button:disabled{opacity:.4;cursor:default}";
         const button = document.createElement("button"); button.type = "button";
-        shadow.append(style, button);
-        control = { host, button, busy: false };
+        const bitrate = document.createElement("span"); bitrate.className = "bitrate";
+        style.textContent += ":host{align-items:center;gap:4px}.bitrate{display:inline-block;width:88px;text-align:right;font:11px/1.3 system-ui,sans-serif;color:#8799af;white-space:nowrap}";
+        shadow.append(style, bitrate, button);
+        control = { host, button, bitrate, busy: false, visible: false };
         rowControls.set(row, control);
         // Stop events before VK's bubble handlers can start or pause playback.
         for (const name of ["pointerdown", "mousedown", "pointerup", "mouseup", "keydown", "keyup", "dblclick"]) host.addEventListener(name, event => event.stopPropagation());
@@ -125,6 +163,7 @@
       }
       const target = row.querySelector(".audio_row__actions") || row.querySelector(".audio_row__title") || row;
       if (control.host.parentElement !== target) target.append(control.host);
+      bitrateObserver.observe(row);
       updateControl(row, control);
     }
   }
@@ -314,7 +353,7 @@
       setTimeout(() => respond({
         tracks: [...tracks.values()].reverse(),
         playerTitle: playerTitle(),
-        diagnostics: { contentVersion: "0.3.12", main: mainHealth, suppressedSounds: suppressed.size, namedTracks: [...tracks.values()].filter(track => track.titleSource !== "filename").length, apiTracks: [...tracks.values()].filter(track => track.source === "vk-api").length, playerAvailable: Boolean(playerTitle()), detectedStreams: [...tracks.values()].filter(track => track.kind === "hls").length, devtools: devtoolsHealth }
+        diagnostics: { contentVersion: "0.3.13", main: mainHealth, suppressedSounds: suppressed.size, namedTracks: [...tracks.values()].filter(track => track.titleSource !== "filename").length, apiTracks: [...tracks.values()].filter(track => track.source === "vk-api").length, playerAvailable: Boolean(playerTitle()), detectedStreams: [...tracks.values()].filter(track => track.kind === "hls").length, devtools: devtoolsHealth }
       }), 80);
       return true;
     } else if (message?.type === "CONSUME_ROW_DOWNLOAD") {
@@ -346,6 +385,7 @@
       urls.clear();
       audioIds.clear();
       rowClicks.clear();
+      bitrateValues.clear();
       syncRowButtons();
       // Bound memory even during a long VK session.
       while (ignored.size > 1000) ignored.delete(ignored.values().next().value);
