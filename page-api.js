@@ -6,7 +6,7 @@
   const CHANNEL = "vk-audio-api-v3";
   const post = window.postMessage.bind(window);
   if (window[KEY]) { window[KEY].install(); return; }
-  const state = { version: "0.3.13", responses: 0, parsed: 0, found: 0, missingUrls: 0, emptyUrls: 0, encodedUrls: 0, invalidUrls: 0, decodedUrls: 0, decodeFailed: 0, needsUserId: 0, errors: 0, oversized: 0, endpoint: "" };
+  const state = { version: "0.3.15", responses: 0, parsed: 0, found: 0, missingUrls: 0, emptyUrls: 0, encodedUrls: 0, invalidUrls: 0, decodedUrls: 0, decodeFailed: 0, needsUserId: 0, errors: 0, oversized: 0, endpoint: "" };
   const consumed = new WeakSet();
   let fetchWrapper;
   let jsonWrapper;
@@ -23,7 +23,7 @@
     try { state.endpoint = new URL(url, location.href).pathname.slice(0, 100); } catch { state.endpoint = ""; }
     let viewerId = 0;
     try { viewerId = Number(window.vk?.id) || 0; } catch { /* Page context may not be ready yet. */ }
-    const result = api.extract(payload, api.isHistory(url, location.href), viewerId);
+    const result = api.extract(payload, api.isHistory(url, location.href), viewerId, window[Symbol.for("vk-audio.resolver.v1")]?.remember);
     if (result.stats.parsed) state.parsed++;
     else state.errors++;
     state.found += result.tracks.length;

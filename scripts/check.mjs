@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const domains = spawnSync(process.execPath, ["scripts/sync-domains.mjs", "--check"], { cwd: root, stdio: "inherit", windowsHide: true });
+if (domains.status !== 0) throw new Error("Audio domain permissions check failed");
 const manifest = JSON.parse(readFileSync(resolve(root, "manifest.json"), "utf8"));
 if (manifest.manifest_version !== 3) throw new Error("Expected Manifest V3");
 const declared = [manifest.background.service_worker, manifest.action.default_popup, manifest.devtools_page, ...manifest.content_scripts.flatMap(script => script.js)];

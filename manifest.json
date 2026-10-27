@@ -1,15 +1,18 @@
 {
   "manifest_version": 3,
   "name": "VK Audio — сохранить аудио",
-  "version": "0.3.13",
+  "version": "0.3.15",
   "description": "Сохранение обнаруженных аудиофайлов и HLS-потоков, включая AES-128, со страниц ВКонтакте.",
   "minimum_chrome_version": "120",
   "permissions": ["downloads", "storage", "scripting"],
   "devtools_page": "devtools.html",
   "host_permissions": [
-    "https://vk.com/*", "https://*.vk.com/*",
-    "https://vk.ru/*", "https://*.vk.ru/*",
-    "https://*.vkuseraudio.ru/*"
+    "https://vk.com/*",
+    "https://*.vk.com/*",
+    "https://vk.ru/*",
+    "https://*.vk.ru/*",
+    "https://*.vkuseraudio.ru/*",
+    "https://*.okcdn.ru/*"
   ],
   "optional_host_permissions": ["https://*/*"],
   "background": { "service_worker": "background.js", "type": "module" },
@@ -27,7 +30,7 @@
       "https://vk.com/*", "https://*.vk.com/*",
       "https://vk.ru/*", "https://*.vk.ru/*"
     ],
-    "js": ["audio-decoder.js", "api-parser.js", "page-api.js"],
+    "js": ["audio-decoder.js", "api-parser.js", "page-resolver.js", "page-api.js"],
     "all_frames": true,
     "world": "MAIN",
     "run_at": "document_start"

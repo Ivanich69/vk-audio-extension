@@ -6,11 +6,11 @@ import { deflateRawSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-for (const args of [["scripts/check.mjs"], ["--test", "tests/media.test.mjs", "tests/hls.test.mjs", "tests/page-api.test.mjs", "tests/devtools.test.mjs", "tests/decoder.test.mjs", "tests/ts-audio.test.mjs", "tests/background.test.mjs", "tests/download.test.mjs", "tests/bitrate.test.mjs"]]) {
+for (const args of [["scripts/sync-domains.mjs"], ["scripts/check.mjs"], ["--test", "tests/media.test.mjs", "tests/hls.test.mjs", "tests/page-api.test.mjs", "tests/devtools.test.mjs", "tests/decoder.test.mjs", "tests/ts-audio.test.mjs", "tests/background.test.mjs", "tests/download.test.mjs", "tests/bitrate.test.mjs", "tests/resolver.test.mjs"]]) {
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: "inherit", windowsHide: true });
   if (result.status !== 0) process.exit(result.status || 1);
 }
-const files = ["manifest.json", "background.js", "api-parser.js", "audio-decoder.js", "THIRD_PARTY.md", "licenses/vk_api-Apache-2.0.txt", "content.js", "page-api.js", "devtools.html", "devtools.js", "popup.html", "popup.js", "download.html", "download.js", "styles.css", "lib/media.js", "lib/hls.js", "lib/ts-audio.js", "lib/bitrate.js", "README.md"];
+const files = ["manifest.json", "audio-domains.js", "scripts/sync-domains.mjs", "background.js", "api-parser.js", "audio-decoder.js", "THIRD_PARTY.md", "licenses/vk_api-Apache-2.0.txt", "content.js", "page-api.js", "page-resolver.js", "devtools.html", "devtools.js", "popup.html", "popup.js", "download.html", "download.js", "styles.css", "lib/media.js", "lib/hls.js", "lib/ts-audio.js", "lib/bitrate.js", "README.md"];
 const manifest = JSON.parse(readFileSync(resolve(root, "manifest.json"), "utf8"));
 const table = Array.from({ length: 256 }, (_, n) => {
   for (let i = 0; i < 8; i++) n = (n >>> 1) ^ (n & 1 ? 0xedb88320 : 0);

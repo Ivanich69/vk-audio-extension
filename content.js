@@ -23,6 +23,7 @@
   let notice;
   let noticeTimer;
   const bitrateValues = new Map();
+  const resolutionValues = new Map();
   let bitrateRequests = 0;
   const bitrateObserver = new IntersectionObserver(entries => {
     for (const entry of entries) {
@@ -33,12 +34,13 @@
     }
   });
 
-  function updateBitrate(row, control, track) {
+  function updateBitrate(row, control, track, retry = false) {
+    if (!track && control.visible) resolveRow(row, retry);
     const cached = track && bitrateValues.get(track.url);
     const value = cached?.value;
     control.bitrate.textContent = value ? `≈${value.kbps} кбит/с` : cached?.pending ? "…" : "— кбит/с";
-    control.bitrate.title = value ? "Оценка по аудиокадрам небольшого фрагмента. При VBR средний битрейт всего трека может отличаться." : "Битрейт пока не определён. Проверка не мешает скачиванию.";
-    if (!track || cached || !control.visible || bitrateRequests >= 2) return;
+    control.bitrate.title = value ? "Оценка по аудиокадрам небольшого фрагмента. При VBR средний битрейт всего трека может отличаться." : `${cached?.reason || "Битрейт пока не определён."} Нажми, чтобы повторить проверку (не чаще раза в 5 секунд). Скачивание доступно.`;
+    if (!track || cached?.pending || value || (!retry && cached?.until > Date.now()) || !control.visible || bitrateRequests >= 2) return;
     const url = track.url;
     const entry = { pending: true, value: null };
     if (bitrateValues.size >= 1000) {
@@ -48,11 +50,12 @@
     bitrateValues.set(url, entry);
     bitrateRequests++;
     control.bitrate.textContent = "…";
-    chrome.runtime.sendMessage({ type: "GET_BITRATE", id: track.id }).then(result => {
+    chrome.runtime.sendMessage({ type: "GET_BITRATE", id: track.id, retry }).then(result => {
       const rate = result?.bitrate;
       if (result?.ok && result.url === url && Number.isInteger(rate?.kbps) && rate.kbps >= 8 && rate.kbps <= 2000) entry.value = rate;
+      entry.reason = result?.bitrateReason;
     }).catch(() => {}).finally(() => {
-      entry.pending = false; bitrateRequests--;
+      entry.pending = false; entry.until = Date.now() + 60000; bitrateRequests--;
       if (row.isConnected) updateControl(row, control);
       scheduleScan();
     });
@@ -88,6 +91,29 @@
     return null;
   }
 
+  function rowIdentity(row) {
+    const data = rowData(row);
+    return [row.getAttribute("data-full-id"), row.getAttribute("data-audio-id"), row.id?.replace(/^audio/, ""),
+      Array.isArray(data) ? `${data[1]}_${data[0]}` : data ? `${data.owner_id}_${data.id}` : ""]
+      .find(id => typeof id === "string" && /^-?\d{1,24}_-?\d{1,24}$/.test(id)) || null;
+  }
+
+  function resolveRow(row, retry) {
+    const audioId = rowIdentity(row);
+    if (!audioId || bitrateRequests >= 2) return;
+    const previous = resolutionValues.get(audioId);
+    if (previous?.pending || (!retry && previous?.until > Date.now())) return;
+    if (resolutionValues.size >= 1000) {
+      const oldest = [...resolutionValues].find(([, entry]) => !entry.pending);
+      if (oldest) resolutionValues.delete(oldest[0]);
+    }
+    const entry = { pending: true, until: 0 };
+    resolutionValues.set(audioId, entry); bitrateRequests++;
+    chrome.runtime.sendMessage({ type: "RESOLVE_AUDIO", audioId }).catch(() => {}).finally(() => {
+      entry.pending = false; entry.until = Date.now() + 60000; bitrateRequests--; scheduleScan();
+    });
+  }
+
   function showNotice(text) {
     if (!document.body) return;
     if (!notice?.host.isConnected) {
@@ -111,7 +137,7 @@
     const track = rowTrack(row);
     control.button.disabled = control.busy || !track;
     control.button.textContent = control.busy ? "…" : "↓";
-    const label = track ? `Скачать: ${track.title}` : "Включи этот трек, чтобы VK передал ссылку для скачивания";
+    const label = track ? `Скачать: ${track.title}` : "Получаем ссылку у VK. Если стрелка не активна, нажми на битрейт для повторной попытки.";
     control.host.title = label;
     control.button.setAttribute("aria-label", label);
     updateBitrate(row, control, track);
@@ -152,7 +178,14 @@
         style.textContent = ":host{all:initial;display:inline-flex;vertical-align:middle;margin-inline-start:6px;flex-shrink:0}button{box-sizing:border-box;width:28px;height:28px;border:0;border-radius:7px;padding:0;background:transparent;color:#5181b8;font:600 22px/28px system-ui,sans-serif;cursor:pointer}button:hover{background:#5181b822}button:focus-visible{outline:2px solid #5181b8;outline-offset:2px}button:disabled{opacity:.4;cursor:default}";
         const button = document.createElement("button"); button.type = "button";
         const bitrate = document.createElement("span"); bitrate.className = "bitrate";
+        bitrate.setAttribute("role", "button"); bitrate.tabIndex = 0;
+        bitrate.setAttribute("aria-label", "Повторить проверку битрейта");
+        bitrate.addEventListener("click", () => updateBitrate(row, control, rowTrack(row), true));
+        bitrate.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); updateBitrate(row, control, rowTrack(row), true); }
+        });
         style.textContent += ":host{align-items:center;gap:4px}.bitrate{display:inline-block;width:88px;text-align:right;font:11px/1.3 system-ui,sans-serif;color:#8799af;white-space:nowrap}";
+        style.textContent += ".bitrate{cursor:pointer}.bitrate:focus-visible{outline:2px solid #5181b8;outline-offset:2px}";
         shadow.append(style, bitrate, button);
         control = { host, button, bitrate, busy: false, visible: false };
         rowControls.set(row, control);
@@ -353,7 +386,7 @@
       setTimeout(() => respond({
         tracks: [...tracks.values()].reverse(),
         playerTitle: playerTitle(),
-        diagnostics: { contentVersion: "0.3.13", main: mainHealth, suppressedSounds: suppressed.size, namedTracks: [...tracks.values()].filter(track => track.titleSource !== "filename").length, apiTracks: [...tracks.values()].filter(track => track.source === "vk-api").length, playerAvailable: Boolean(playerTitle()), detectedStreams: [...tracks.values()].filter(track => track.kind === "hls").length, devtools: devtoolsHealth }
+        diagnostics: { contentVersion: "0.3.15", main: mainHealth, suppressedSounds: suppressed.size, namedTracks: [...tracks.values()].filter(track => track.titleSource !== "filename").length, apiTracks: [...tracks.values()].filter(track => track.source === "vk-api").length, playerAvailable: Boolean(playerTitle()), detectedStreams: [...tracks.values()].filter(track => track.kind === "hls").length, devtools: devtoolsHealth }
       }), 80);
       return true;
     } else if (message?.type === "CONSUME_ROW_DOWNLOAD") {
@@ -386,6 +419,7 @@
       audioIds.clear();
       rowClicks.clear();
       bitrateValues.clear();
+      resolutionValues.clear();
       syncRowButtons();
       // Bound memory even during a long VK session.
       while (ignored.size > 1000) ignored.delete(ignored.values().next().value);

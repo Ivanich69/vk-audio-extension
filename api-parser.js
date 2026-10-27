@@ -50,7 +50,7 @@
       duration: Number.isFinite(Number(fields.duration)) ? Math.max(0, Math.min(604800, Math.round(Number(fields.duration)))) : 0
     };
   }
-  function extract(payload, attachmentsOnly = false, viewerId = 0) {
+  function extract(payload, attachmentsOnly = false, viewerId = 0, onCandidate) {
     const stats = { parsed: false, candidates: 0, missingUrls: 0, emptyUrls: 0, encodedUrls: 0, invalidUrls: 0, decodedUrls: 0, decodeFailed: 0, needsUserId: 0, truncated: false };
     if (typeof payload === "string") payload = parseText(payload);
     if (!payload || typeof payload !== "object") return { tracks: [], stats };
@@ -68,6 +68,7 @@
       seen.add(value);
       const fields = attachmentsOnly ? (value.type === "audio" ? value.audio : null) : fieldsOf(value);
       if (fields && candidate(fields)) {
+        onCandidate?.(attachmentsOnly ? fields : value, fields);
         stats.candidates++;
         const encoded = typeof fields.url === "string" && fields.url.includes("audio_api_unavailable");
         let decoded;

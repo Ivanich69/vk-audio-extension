@@ -1,10 +1,11 @@
 {
   "name": "vk-audio-extension",
-  "version": "0.3.13",
+  "version": "0.3.15",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
+    "sync-domains": "node scripts/sync-domains.mjs",
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check.mjs",
     "build": "node scripts/package.mjs"

@@ -3,6 +3,25 @@ import { createBitrateProbe } from "./lib/bitrate.js";
 
 const probeBitrate = createBitrateProbe({ hasPermission: pattern => chrome.permissions.contains({ origins: [pattern] }) });
 
+async function resolveAudio(audioId, tabId, target) {
+  if (!/^-?\d{1,24}_-?\d{1,24}$/.test(audioId || "")) return null;
+  try {
+    const results = await chrome.scripting.executeScript({ target: { tabId, ...target }, world: "MAIN", args: [audioId],
+      func: async id => globalThis[Symbol.for("vk-audio.resolver.v1")]?.refresh(id) || null });
+    const track = results?.[0]?.result;
+    if (track?.audioId !== audioId) return null;
+    safeUrl(track.url);
+    await chrome.tabs.sendMessage(tabId, { type: "IMPORT_TRACKS", tracks: [track] }, target.documentIds ? { documentId: target.documentIds[0] } : { frameId: 0 });
+    return track;
+  } catch { return null; }
+}
+
+async function refreshSource(track, tabId, target) {
+  if (track.source !== "vk-api") return track;
+  const fresh = await resolveAudio(track.audioId, tabId, target);
+  return fresh ? { ...track, url: fresh.url } : track;
+}
+
 async function getBitrate(message, sender, popup = false) {
   const tabId = popup ? message.tabId : sender.tab?.id;
   if (!Number.isInteger(tabId) || !/^[a-f0-9-]{36}$/.test(message.id || "")) throw new Error("Некорректный запрос.");
@@ -10,8 +29,28 @@ async function getBitrate(message, sender, popup = false) {
   if (!isVkPage(tab.url) || (!popup && (!isVkPage(sender.url) || typeof sender.documentId !== "string"))) throw new Error("Открой VK.");
   const result = await chrome.tabs.sendMessage(tabId, { type: "GET_TRACK", id: message.id }, popup ? { frameId: 0 } : { documentId: sender.documentId });
   if (!result?.track || result.track.id !== message.id) return { ok: true, bitrate: null };
-  const url = safeUrl(result.track.url);
-  return { ok: true, url, bitrate: await probeBitrate(url) };
+  let url = safeUrl(result.track.url);
+  let bitrate = await probeBitrate(url, { retry: message.retry === true });
+  if (!bitrate) {
+    const fresh = await refreshSource(result.track, tabId, popup ? { frameIds: [0] } : { documentIds: [sender.documentId] });
+    if (fresh !== result.track) {
+      url = safeUrl(fresh.url);
+      probeBitrate.forget?.(url);
+      bitrate = await probeBitrate(url);
+    }
+  }
+  const reasons = {
+    host: "Сервер не входит в список доменов для проверки битрейта.",
+    permission: "Нет разрешения на доступ к аудиосерверу.",
+    network: "Не удалось получить фрагмент: ошибка сети или перенаправление.",
+    http: "Сервер отклонил запрос фрагмента или вернул неверный диапазон байтов.",
+    timeout: "Сервер не ответил за время проверки.",
+    format: "Формат этого фрагмента пока не поддерживается для оценки битрейта.",
+    limit: "Для проверки требуется прочитать больше данных, чем допускает лимит.",
+    busy: "Очередь проверки занята. Повтори попытку чуть позже.",
+    sample: "В прочитанном фрагменте недостаточно полных аудиокадров либо он не разобран."
+  };
+  return { ok: true, url, bitrate, bitrateReason: bitrate ? "" : reasons[probeBitrate.reason?.(url)] || reasons.sample };
 }
 
 async function ensureCapture(tabId, main = true) {
@@ -19,8 +58,8 @@ async function ensureCapture(tabId, main = true) {
   const tab = await chrome.tabs.get(tabId);
   if (!isVkPage(tab.url)) throw new Error("Открой вкладку ВКонтакте.");
   await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", files: ["content.js"] });
-  if (main) await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", files: ["audio-decoder.js", "api-parser.js", "page-api.js"] });
-  return { ok: true, version: "0.3.13" };
+  if (main) await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", files: ["audio-decoder.js", "api-parser.js", "page-resolver.js", "page-api.js"] });
+  return { ok: true, version: "0.3.15" };
 }
 
 async function importTracks(tabId, tracks, devtools) {
@@ -34,7 +73,7 @@ async function startDownload(message) {
   if (!isVkPage(tab.url)) throw new Error("Открой вкладку ВКонтакте.");
   const result = await chrome.tabs.sendMessage(tab.id, { type: "GET_TRACK", id: message.id }, { frameId: 0 });
   if (!result?.track) throw new Error("Трек больше не доступен. Обнови список.");
-  return downloadTrack(result.track);
+  return downloadTrack(await refreshSource(result.track, tab.id, { frameIds: [0] }));
 }
 
 async function startRowDownload(message, sender) {
@@ -50,7 +89,7 @@ async function startRowDownload(message, sender) {
     type: "CONSUME_ROW_DOWNLOAD", id: message.id, nonce: message.nonce
   }, { documentId: sender.documentId });
   if (!result?.track || result.track.id !== message.id) throw new Error("Нажми кнопку скачивания рядом с треком ещё раз.");
-  return downloadTrack(result.track);
+  return downloadTrack(await refreshSource(result.track, sender.tab.id, { documentIds: [sender.documentId] }));
 }
 
 async function downloadTrack(track) {
@@ -85,6 +124,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     action = startRowDownload(message, sender);
   } else if (sender.tab && isVkPage(sender.url) && message?.type === "GET_BITRATE") {
     action = getBitrate(message, sender);
+  } else if (sender.tab && isVkPage(sender.url) && typeof sender.documentId === "string" && message?.type === "RESOLVE_AUDIO") {
+    action = chrome.tabs.get(sender.tab.id).then(tab => isVkPage(tab.url)
+      ? resolveAudio(message.audioId, tab.id, { documentIds: [sender.documentId] }).then(track => ({ ok: Boolean(track) }))
+      : { ok: false });
   } else if (sender.url === chrome.runtime.getURL("devtools.html") && message?.type === "DEVTOOLS_CAPTURE") {
     const state = message.state || {};
     const devtools = { active: true };

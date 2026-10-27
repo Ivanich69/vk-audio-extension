@@ -4,21 +4,26 @@ const el = id => document.getElementById(id);
 let activeTab;
 let busy = false;
 const bitrateLabels = new WeakMap();
+async function loadBitrate(label, retry = false) {
+  const data = bitrateLabels.get(label);
+  if (!data || !label.isConnected || data.pending) return;
+  data.pending = true;
+  label.textContent = "…";
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "GET_BITRATE", tabId: data.tabId, id: data.track.id, retry });
+    if (!label.isConnected) return;
+    const rate = result?.bitrate;
+    const valid = result?.ok && result.url === data.track.url && Number.isInteger(rate?.kbps) && rate.kbps >= 8 && rate.kbps <= 2000;
+    label.textContent = valid ? `≈${rate.kbps} кбит/с` : "— кбит/с";
+    label.title = valid ? "Оценка по аудиокадрам фрагмента; средний битрейт при VBR может отличаться." : `${result?.bitrateReason || "Не удалось определить битрейт."} Нажми для повторной проверки (не чаще раза в 5 секунд).`;
+  } catch { if (label.isConnected) label.textContent = "— кбит/с"; }
+  finally { data.pending = false; }
+}
 const bitrateObserver = new IntersectionObserver(entries => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
-    const label = entry.target;
-    const data = bitrateLabels.get(label);
-    bitrateObserver.unobserve(label);
-    if (!data || !label.isConnected) continue;
-    label.textContent = "…";
-    chrome.runtime.sendMessage({ type: "GET_BITRATE", tabId: data.tabId, id: data.track.id }).then(result => {
-      if (!label.isConnected) return;
-      const rate = result?.bitrate;
-      const valid = result?.ok && result.url === data.track.url && Number.isInteger(rate?.kbps) && rate.kbps >= 8 && rate.kbps <= 2000;
-      label.textContent = valid ? `≈${rate.kbps} кбит/с` : "— кбит/с";
-      label.title = valid ? "Оценка по аудиокадрам фрагмента; средний битрейт при VBR может отличаться." : "Не удалось определить битрейт. Скачивание доступно.";
-    }).catch(() => { if (label.isConnected) label.textContent = "— кбит/с"; });
+    bitrateObserver.unobserve(entry.target);
+    loadBitrate(entry.target);
   }
 });
 el("version").textContent = chrome.runtime.getManifest().version;
@@ -113,6 +118,11 @@ function render(tracks, playerTitle = "") {
     }
     const actions = document.createElement("div"); actions.className = "download-actions";
     const bitrate = document.createElement("span"); bitrate.className = "bitrate";
+    bitrate.setAttribute("role", "button"); bitrate.tabIndex = 0;
+    bitrate.addEventListener("click", () => loadBitrate(bitrate, true));
+    bitrate.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); loadBitrate(bitrate, true); }
+    });
     bitrate.textContent = "— кбит/с";
     bitrateLabels.set(bitrate, { track, tabId: activeTab?.id });
     actions.append(bitrate, button);
